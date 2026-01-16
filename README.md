@@ -38,3 +38,13 @@ Run with:
 ```bash
 go run ./cmd/orion -config config.json -cmd scan
 ```
+
+## UI 控制台
+
+启动本地 Web 控制台：
+
+```bash
+go run ./cmd/server
+```
+
+打开浏览器访问 `http://localhost:8080`，即可使用任务看板、工作流编辑器、日志与文件浏览器等功能。
