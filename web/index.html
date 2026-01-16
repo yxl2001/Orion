@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SRC Recon Workflow Engine</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/element-plus/dist/index.css"
+    />
+    <style>
+      body {
+        margin: 0;
+        background: #f5f7fa;
+        font-family: "Helvetica Neue", Arial, sans-serif;
+      }
+      .layout {
+        display: flex;
+        height: 100vh;
+      }
+      .sidebar {
+        width: 280px;
+        background: #0f172a;
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+      }
+      .sidebar h2 {
+        margin: 0;
+        padding: 24px;
+        font-size: 18px;
+      }
+      .sidebar .menu {
+        padding: 0 16px 24px;
+      }
+      .content {
+        flex: 1;
+        padding: 24px;
+        overflow: auto;
+      }
+      .card {
+        background: #fff;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 12px rgba(15, 23, 42, 0.08);
+      }
+      .toolbar {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .workflow-editor {
+        display: grid;
+        grid-template-columns: 2fr 1fr;
+        gap: 16px;
+      }
+      .log-box {
+        background: #0f172a;
+        color: #d1d5db;
+        padding: 12px;
+        border-radius: 8px;
+        height: 220px;
+        overflow: auto;
+        font-family: "Fira Code", monospace;
+        font-size: 12px;
+      }
+      .file-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 12px;
+      }
+      .file-item {
+        border: 1px solid #e2e8f0;
+        border-radius: 8px;
+        padding: 10px;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .status-pill {
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: #e2e8f0;
+      }
+      .status-pill.running {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+      .status-pill.success {
+        background: #dcfce7;
+        color: #15803d;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="layout">
+        <aside class="sidebar">
+          <h2>SRC Recon Engine</h2>
+          <div class="menu">
+            <p>任务看板</p>
+            <el-divider border-style="dashed" />
+            <el-button type="primary" plain @click="openCreate">新建任务</el-button>
+            <el-menu class="el-menu-vertical-demo" :default-active="activeTask" @select="selectTask">
+              <el-menu-item v-for="task in tasks" :key="task.name" :index="task.name">
+                <span>{{ task.name }}</span>
+              </el-menu-item>
+            </el-menu>
+          </div>
+        </aside>
+        <main class="content">
+          <section class="card">
+            <h3>任务概览</h3>
+            <el-row :gutter="16">
+              <el-col :span="8">
+                <el-card shadow="never">
+                  <p>目标</p>
+                  <strong>{{ currentTask.target || '-' }}</strong>
+                </el-card>
+              </el-col>
+              <el-col :span="8">
+                <el-card shadow="never">
+                  <p>状态</p>
+                  <span class="status-pill" :class="statusClass(currentTask.status)">{{ currentTask.status || 'N/A' }}</span>
+                </el-card>
+              </el-col>
+              <el-col :span="8">
+                <el-card shadow="never">
+                  <p>更新时间</p>
+                  <strong>{{ currentTask.updated_at || '-' }}</strong>
+                </el-card>
+              </el-col>
+            </el-row>
+          </section>
+
+          <section class="card">
+            <h3>工作流控制</h3>
+            <div class="toolbar">
+              <el-button type="success" @click="runCommand('collect')">资产收集</el-button>
+              <el-button type="success" @click="runCommand('probe')">探活</el-button>
+              <el-button type="success" @click="runCommand('fp')">指纹识别</el-button>
+              <el-button type="success" @click="runCommand('scan')">漏洞扫描</el-button>
+              <el-button type="primary" @click="runCommand('all')">全流程执行</el-button>
+            </div>
+          </section>
+
+          <section class="card workflow-editor">
+            <div>
+              <h3>工作流编辑器</h3>
+              <el-input
+                type="textarea"
+                :rows="16"
+                v-model="workflowJson"
+                placeholder="输入 workflow 节点 JSON"
+              ></el-input>
+              <el-button style="margin-top: 12px" type="primary" @click="saveWorkflow">保存工作流</el-button>
+            </div>
+            <div>
+              <h3>资产关联视图</h3>
+              <el-table :data="assetView" style="width: 100%" size="small">
+                <el-table-column prop="domain" label="域名" />
+                <el-table-column prop="ip" label="IP" />
+                <el-table-column prop="service" label="服务" />
+              </el-table>
+            </div>
+          </section>
+
+          <section class="card">
+            <h3>实时日志</h3>
+            <div class="log-box">{{ logs }}</div>
+          </section>
+
+          <section class="card">
+            <h3>文件浏览器</h3>
+            <div class="file-list">
+              <div class="file-item" v-for="file in files" :key="file" @click="openFile(file)">
+                {{ file }}
+              </div>
+            </div>
+          </section>
+        </main>
+      </div>
+
+      <el-dialog v-model="showCreate" title="新建任务" width="400px">
+        <el-form label-position="top">
+          <el-form-item label="任务名称">
+            <el-input v-model="newTask.name" />
+          </el-form-item>
+          <el-form-item label="目标">
+            <el-input v-model="newTask.target" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="showCreate = false">取消</el-button>
+          <el-button type="primary" @click="createTask">创建</el-button>
+        </template>
+      </el-dialog>
+
+      <el-dialog v-model="showFile" title="文件预览" width="600px">
+        <pre style="white-space: pre-wrap">{{ fileContent }}</pre>
+      </el-dialog>
+    </div>
+
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/element-plus"></script>
+    <script>
+      const { createApp, ref, onMounted } = Vue;
+
+      createApp({
+        setup() {
+          const tasks = ref([]);
+          const activeTask = ref("");
+          const currentTask = ref({});
+          const workflowJson = ref("[]");
+          const logs = ref("暂无日志");
+          const assetView = ref([
+            { domain: "example.com", ip: "192.0.2.10", service: "https:443" },
+          ]);
+          const files = ref(["task_info.json", "run.log", "subdomains.txt"]);
+          const showCreate = ref(false);
+          const newTask = ref({ name: "", target: "" });
+          const showFile = ref(false);
+          const fileContent = ref("");
+
+          const loadTasks = async () => {
+            const res = await fetch("/api/tasks");
+            tasks.value = await res.json();
+            if (!activeTask.value && tasks.value.length > 0) {
+              selectTask(tasks.value[0].name);
+            }
+          };
+
+          const selectTask = async (name) => {
+            activeTask.value = name;
+            const res = await fetch(`/api/tasks/${name}`);
+            currentTask.value = await res.json();
+            workflowJson.value = JSON.stringify(currentTask.value.workflow || [], null, 2);
+            await loadLogs();
+          };
+
+          const runCommand = async (cmd) => {
+            if (!activeTask.value) return;
+            await fetch(`/api/tasks/${activeTask.value}?cmd=${cmd}`, { method: "POST" });
+            await selectTask(activeTask.value);
+          };
+
+          const saveWorkflow = async () => {
+            if (!activeTask.value) return;
+            let workflow = [];
+            try {
+              workflow = JSON.parse(workflowJson.value);
+            } catch (err) {
+              alert("JSON 格式错误");
+              return;
+            }
+            const payload = { ...currentTask.value, workflow };
+            await fetch("/api/tasks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            await selectTask(activeTask.value);
+          };
+
+          const loadLogs = async () => {
+            if (!activeTask.value) return;
+            const res = await fetch(`/api/logs/${activeTask.value}`);
+            const data = await res.json();
+            logs.value = data.content || "暂无日志";
+          };
+
+          const openCreate = () => {
+            showCreate.value = true;
+          };
+
+          const createTask = async () => {
+            if (!newTask.value.name) return;
+            const payload = {
+              name: newTask.value.name,
+              target: newTask.value.target,
+              status: "Pending",
+              workflow: [],
+            };
+            await fetch("/api/tasks", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            showCreate.value = false;
+            newTask.value = { name: "", target: "" };
+            await loadTasks();
+          };
+
+          const openFile = async (file) => {
+            if (!activeTask.value) return;
+            const res = await fetch(`/api/files/${activeTask.value}/${file}`);
+            fileContent.value = await res.text();
+            showFile.value = true;
+          };
+
+          const statusClass = (status) => {
+            if (!status) return "";
+            return status.toLowerCase();
+          };
+
+          onMounted(loadTasks);
+
+          return {
+            tasks,
+            activeTask,
+            currentTask,
+            workflowJson,
+            logs,
+            assetView,
+            files,
+            showCreate,
+            newTask,
+            showFile,
+            fileContent,
+            openCreate,
+            createTask,
+            selectTask,
+            runCommand,
+            saveWorkflow,
+            openFile,
+            statusClass,
+          };
+        },
+      }).use(ElementPlus).mount("#app");
+    </script>
+  </body>
+</html>
